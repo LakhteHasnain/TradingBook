@@ -112,24 +112,27 @@ app.post('/api/upload', uploadExcel.single('file'), (req, res) => {
             data: jsonData
         };
         
-        // Convert to trades format
+        // Convert to trades format with new fields
         const trades = jsonData.map((row, index) => ({
             id: Date.now() + index,
+            tradeId: row['Trade Id'] || `T${Date.now()}${index}`,
+            tradingDate: row['Trading Date'] || new Date().toISOString().split('T')[0],
+            openTime: row['Open Time'] || '',
             type: row.Type || 'crypto',
             pair: row.Pair || '',
-            side: row.Side || 'Long',
+            position: row.Position || 'Long',
+            timeframe: row.Timeframe || '',
+            riskPercentage: parseFloat(row['Risk%']) || 0,
             entryPrice: parseFloat(row['Entry Price']) || 0,
-            exitPrice: parseFloat(row['Exit Price']) || 0,
-            quantity: parseFloat(row.Quantity) || 0,
-            leverage: parseFloat(row.Leverage) || 1,
-            stopLoss: parseFloat(row['Stop Loss']) || 0,
-            takeProfit: parseFloat(row['Take Profit']) || 0,
-            slPoints: parseFloat(row['SL Points']) || 0,
-            tpPoints: parseFloat(row['TP Points']) || 0,
-            date: row.Date || new Date().toLocaleDateString(),
-            notes: row.Notes || '',
-            chartImage: row['Chart Image'] || null, // Load chart image path
-            pnl: parseFloat(row['P&L']) || 0
+            stopLoss: parseFloat(row['Stop loss']) || null,
+            takeProfit: parseFloat(row['Take Profit']) || null,
+            closingDate: row['Closing Date'] || '',
+            closeTime: row['Close Time'] || '',
+            profitLoss: parseFloat(row['Profit/Loss']) || 0,
+            chartImage: row['Chart Image'] || null,
+            emotionBefore: row['Emotion Before'] || '',
+            emotionAfter: row['Emotion After'] || '',
+            notes: row.Notes || ''
         }));
 
         res.json({
@@ -145,56 +148,121 @@ app.post('/api/upload', uploadExcel.single('file'), (req, res) => {
     }
 });
 
+
 // Save trades to the currently active file
+// Fix for the /api/save route in server.js
+// Replace the existing save route with this corrected version:
+
 app.post('/api/save', (req, res) => {
     try {
-        const { trades, startingBalance } = req.body;
+        const { trades, startingBalanceCrypto, startingBalanceForex } = req.body;
         
         if (!activeFile.path) {
             return res.status(400).json({ error: 'No active file to save to. Please load a file first.' });
         }
 
-        // Convert trades to Excel format
+        // Convert trades to Excel format with new fields
         const excelData = trades.map(trade => ({
-            'Date': trade.date,
+            'Trade Id': trade.tradeId,
+            'Trading Date': trade.tradingDate,
+            'Open Time': trade.openTime,
             'Type': trade.type,
             'Pair': trade.pair,
-            'Side': trade.side,
+            'Position': trade.position,
+            'Timeframe': trade.timeframe,
+            'Risk%': trade.riskPercentage,
             'Entry Price': trade.entryPrice,
-            'Exit Price': trade.exitPrice,
-            'Quantity': trade.quantity,
-            'Leverage': trade.leverage,
-            'Stop Loss': trade.stopLoss || '',
+            'Stop loss': trade.stopLoss || '',
             'Take Profit': trade.takeProfit || '',
-            'SL Points': trade.slPoints || '',
-            'TP Points': trade.tpPoints || '',
-            'P&L': parseFloat(trade.pnl).toFixed(2),
+            'Closing Date': trade.closingDate || '',
+            'Close Time': trade.closeTime || '',
+            'Profit/Loss': parseFloat(trade.profitLoss).toFixed(2),
             'Chart Image': trade.chartImage || '',
-            'Notes': trade.notes
+            'Emotion Before': trade.emotionBefore || '',
+            'Emotion After': trade.emotionAfter || '',
+            'Notes': trade.notes || ''
         }));
 
-        // Add summary row
-        const totalPnL = trades.reduce((sum, trade) => sum + parseFloat(trade.pnl), 0);
-        const currentBalance = startingBalance + totalPnL;
-        const winningTrades = trades.filter(trade => parseFloat(trade.pnl) > 0).length;
-        const winRate = trades.length > 0 ? (winningTrades / trades.length * 100).toFixed(1) : 0;
+        // Calculate separated statistics using the correct variable names
+        const cryptoTrades = trades.filter(trade => trade.type === 'crypto');
+        const forexTrades = trades.filter(trade => trade.type === 'forex');
+        
+        const cryptoPnL = cryptoTrades.reduce((sum, trade) => sum + parseFloat(trade.profitLoss || 0), 0);
+        const forexPnL = forexTrades.reduce((sum, trade) => sum + parseFloat(trade.profitLoss || 0), 0);
+        
+        const cryptoCurrentBalance = (startingBalanceCrypto || 10000) + cryptoPnL;
+        const forexCurrentBalance = (startingBalanceForex || 10000) + forexPnL;
+        const totalPortfolioValue = cryptoCurrentBalance + forexCurrentBalance;
+        const totalPortfolioPnL = cryptoPnL + forexPnL;
+        
+        const cryptoWinningTrades = cryptoTrades.filter(trade => parseFloat(trade.profitLoss || 0) > 0).length;
+        const forexWinningTrades = forexTrades.filter(trade => parseFloat(trade.profitLoss || 0) > 0).length;
+        
+        const cryptoWinRate = cryptoTrades.length > 0 ? (cryptoWinningTrades / cryptoTrades.length * 100).toFixed(1) : 0;
+        const forexWinRate = forexTrades.length > 0 ? (forexWinningTrades / forexTrades.length * 100).toFixed(1) : 0;
+
+        // Add summary rows
+        excelData.push({
+            'Trade Id': '',
+            'Trading Date': '',
+            'Open Time': '',
+            'Type': 'CRYPTO SUMMARY',
+            'Pair': '',
+            'Position': '',
+            'Timeframe': '',
+            'Risk%': '',
+            'Entry Price': '',
+            'Stop loss': '',
+            'Take Profit': '',
+            'Closing Date': '',
+            'Close Time': '',
+            'Profit/Loss': cryptoPnL.toFixed(2),
+            'Chart Image': '',
+            'Emotion Before': '',
+            'Emotion After': '',
+            'Notes': `Starting: ${startingBalanceCrypto || 10000} | Current: ${cryptoCurrentBalance.toFixed(2)} | Win Rate: ${cryptoWinRate}% | Trades: ${cryptoTrades.length}`
+        });
 
         excelData.push({
-            'Date': '',
-            'Type': 'SUMMARY',
+            'Trade Id': '',
+            'Trading Date': '',
+            'Open Time': '',
+            'Type': 'FOREX SUMMARY',
             'Pair': '',
-            'Side': '',
+            'Position': '',
+            'Timeframe': '',
+            'Risk%': '',
             'Entry Price': '',
-            'Exit Price': '',
-            'Quantity': '',
-            'Leverage': '',
-            'Stop Loss': '',
+            'Stop loss': '',
             'Take Profit': '',
-            'SL Points': '',
-            'TP Points': '',
-            'P&L': totalPnL.toFixed(2),
+            'Closing Date': '',
+            'Close Time': '',
+            'Profit/Loss': forexPnL.toFixed(2),
             'Chart Image': '',
-            'Notes': `Starting: ${startingBalance} | Current: ${currentBalance.toFixed(2)} | Win Rate: ${winRate}% | Total Trades: ${trades.length}`
+            'Emotion Before': '',
+            'Emotion After': '',
+            'Notes': `Starting: ${startingBalanceForex || 10000} | Current: ${forexCurrentBalance.toFixed(2)} | Win Rate: ${forexWinRate}% | Trades: ${forexTrades.length}`
+        });
+
+        excelData.push({
+            'Trade Id': '',
+            'Trading Date': '',
+            'Open Time': '',
+            'Type': 'PORTFOLIO SUMMARY',
+            'Pair': '',
+            'Position': '',
+            'Timeframe': '',
+            'Risk%': '',
+            'Entry Price': '',
+            'Stop loss': '',
+            'Take Profit': '',
+            'Closing Date': '',
+            'Close Time': '',
+            'Profit/Loss': totalPortfolioPnL.toFixed(2),
+            'Chart Image': '',
+            'Emotion Before': '',
+            'Emotion After': '',
+            'Notes': `Total Portfolio: ${totalPortfolioValue.toFixed(2)} | Total P&L: ${totalPortfolioPnL.toFixed(2)} | Total Trades: ${trades.length}`
         });
 
         // Create new workbook and worksheet
@@ -219,7 +287,6 @@ app.post('/api/save', (req, res) => {
         res.status(500).json({ error: 'Error saving file: ' + error.message });
     }
 });
-
 // Upload chart image
 app.post('/api/upload-chart', uploadChart.single('chart'), (req, res) => {
     try {
@@ -276,9 +343,12 @@ app.delete('/api/chart/:filename', (req, res) => {
 });
 
 // Create new Excel file
+// Fix for the /api/create-new route in server.js
+// Replace the existing create-new route with this corrected version:
+
 app.post('/api/create-new', (req, res) => {
     try {
-        const { fileName, trades, startingBalance } = req.body;
+        const { fileName, trades, startingBalanceCrypto, startingBalanceForex } = req.body;
         
         if (!fileName) {
             return res.status(400).json({ error: 'File name is required' });
@@ -289,23 +359,49 @@ app.post('/api/create-new', (req, res) => {
         const fullFileName = sanitizedFileName.endsWith('.xlsx') ? sanitizedFileName : `${sanitizedFileName}.xlsx`;
         const filePath = path.join(uploadsDir, fullFileName);
 
-        // Convert trades to Excel format
+        // Convert trades to Excel format with new fields
         const excelData = trades.map(trade => ({
-            'Date': trade.date,
+            'Trade Id': trade.tradeId,
+            'Trading Date': trade.tradingDate,
+            'Open Time': trade.openTime,
             'Type': trade.type,
             'Pair': trade.pair,
-            'Side': trade.side,
+            'Position': trade.position,
+            'Timeframe': trade.timeframe,
+            'Risk%': trade.riskPercentage,
             'Entry Price': trade.entryPrice,
-            'Exit Price': trade.exitPrice,
-            'Quantity': trade.quantity,
-            'Leverage': trade.leverage,
-            'Stop Loss': trade.stopLoss || '',
+            'Stop loss': trade.stopLoss || '',
             'Take Profit': trade.takeProfit || '',
-            'SL Points': trade.slPoints || '',
-            'TP Points': trade.tpPoints || '',
-            'P&L': parseFloat(trade.pnl).toFixed(2),
-            'Notes': trade.notes
+            'Closing Date': trade.closingDate || '',
+            'Close Time': trade.closeTime || '',
+            'Profit/Loss': parseFloat(trade.profitLoss || 0).toFixed(2),
+            'Chart Image': trade.chartImage || '',
+            'Emotion Before': trade.emotionBefore || '',
+            'Emotion After': trade.emotionAfter || '',
+            'Notes': trade.notes || ''
         }));
+
+        // Add balance configuration row with correct variable names
+        excelData.push({
+            'Trade Id': '',
+            'Trading Date': '',
+            'Open Time': '',
+            'Type': 'BALANCE CONFIG',
+            'Pair': '',
+            'Position': '',
+            'Timeframe': '',
+            'Risk%': '',
+            'Entry Price': '',
+            'Stop loss': '',
+            'Take Profit': '',
+            'Closing Date': '',
+            'Close Time': '',
+            'Profit/Loss': '',
+            'Chart Image': '',
+            'Emotion Before': '',
+            'Emotion After': '',
+            'Notes': `Crypto Starting: ${startingBalanceCrypto || 10000} | Forex Starting: ${startingBalanceForex || 10000}`
+        });
 
         // Create workbook and worksheet
         const ws = XLSX.utils.json_to_sheet(excelData);
@@ -333,6 +429,8 @@ app.post('/api/create-new', (req, res) => {
         res.status(500).json({ error: 'Error creating file: ' + error.message });
     }
 });
+
+
 
 // Download the currently active file
 app.get('/api/download', (req, res) => {
@@ -398,8 +496,26 @@ app.post('/api/load-file', (req, res) => {
         const worksheet = workbook.Sheets[sheetName];
         const jsonData = XLSX.utils.sheet_to_json(worksheet);
         
-        // Filter out summary rows
-        const filteredData = jsonData.filter(row => row.Type !== 'SUMMARY');
+        // Filter out summary rows and extract balance config if present
+        let startingBalanceCrypto = 10000;
+        let startingBalanceForex = 10000;
+        
+        const balanceConfigRow = jsonData.find(row => row.Type === 'BALANCE CONFIG');
+        if (balanceConfigRow && balanceConfigRow.Notes) {
+            const balanceMatch = balanceConfigRow.Notes.match(/Crypto Starting: ([\d.]+).*Forex Starting: ([\d.]+)/);
+            if (balanceMatch) {
+                startingBalanceCrypto = parseFloat(balanceMatch[1]);
+                startingBalanceForex = parseFloat(balanceMatch[2]);
+            }
+        }
+        
+        const filteredData = jsonData.filter(row => 
+            row.Type !== 'SUMMARY' && 
+            row.Type !== 'CRYPTO SUMMARY' && 
+            row.Type !== 'FOREX SUMMARY' && 
+            row.Type !== 'PORTFOLIO SUMMARY' && 
+            row.Type !== 'BALANCE CONFIG'
+        );
         
         // Store as active file
         activeFile = {
@@ -408,31 +524,36 @@ app.post('/api/load-file', (req, res) => {
             data: filteredData
         };
         
-        // Convert to trades format
+        // Convert to trades format with new fields
         const trades = filteredData.map((row, index) => ({
             id: Date.now() + index,
+            tradeId: row['Trade Id'] || `T${Date.now()}${index}`,
+            tradingDate: row['Trading Date'] || new Date().toISOString().split('T')[0],
+            openTime: row['Open Time'] || '',
             type: row.Type || 'crypto',
             pair: row.Pair || '',
-            side: row.Side || 'Long',
+            position: row.Position || 'Long',
+            timeframe: row.Timeframe || '',
+            riskPercentage: parseFloat(row['Risk%']) || 0,
             entryPrice: parseFloat(row['Entry Price']) || 0,
-            exitPrice: parseFloat(row['Exit Price']) || 0,
-            quantity: parseFloat(row.Quantity) || 0,
-            leverage: parseFloat(row.Leverage) || 1,
-            stopLoss: parseFloat(row['Stop Loss']) || 0,
-            takeProfit: parseFloat(row['Take Profit']) || 0,
-            slPoints: parseFloat(row['SL Points']) || 0,
-            tpPoints: parseFloat(row['TP Points']) || 0,
-            date: row.Date || new Date().toLocaleDateString(),
-            notes: row.Notes || '',
+            stopLoss: parseFloat(row['Stop loss']) || null,
+            takeProfit: parseFloat(row['Take Profit']) || null,
+            closingDate: row['Closing Date'] || '',
+            closeTime: row['Close Time'] || '',
+            profitLoss: parseFloat(row['Profit/Loss']) || 0,
             chartImage: row['Chart Image'] || null,
-            pnl: parseFloat(row['P&L']) || 0
+            emotionBefore: row['Emotion Before'] || '',
+            emotionAfter: row['Emotion After'] || '',
+            notes: row.Notes || ''
         }));
 
         res.json({
             success: true,
             message: 'File loaded successfully',
             fileName: fileName,
-            trades: trades
+            trades: trades,
+            startingBalanceCrypto: startingBalanceCrypto,
+            startingBalanceForex: startingBalanceForex
         });
 
     } catch (error) {
